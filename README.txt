@@ -1,8 +1,4 @@
-CSC346 - Project 8
-Author: Glen Chin
-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-README.txt
-------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Cloud Computing Course Project
 Demo Link: https://youtu.be/adp6Ay_Jh6U
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Files:
@@ -24,7 +20,7 @@ Note: bashrc is a configuration file which replaces .bashrc in /home/ec2-user of
 Note: In my main instance, server.jar and bashrc is placed in /home/ec2-user. Everything else is placed in the /cgi-bin directory.
 Note: While some files share the same name as those in Project 7, these have been updated for use in Project 8 to allow utilization of cookies.
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-Webpage URL:
+Webpage Example URL:
 http://<ip_address>/cgi-bin/main
 ------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 Description of files
@@ -61,7 +57,7 @@ existing session that has expired.
 This script handles all database interactions across the other scripts. You will need to create a passwords file called dbinfo which includes your credentials to access
 the RDS instance.
 
-[server.jar]
+[server.jar] (Note: omitted from repository)
 This a file to be transferred into the new instance through monitor_node script.
 
 [bashrc]
