@@ -1,0 +1,148 @@
+#! /usr/bin/python3
+
+# ----------------------------------------------------------------------------------------------- #
+# CSC346 Clouding Computing - Project 7
+# Author: Glen Chin
+# Title: monitor_node
+# Description: Background script responsible the installation of Java and configurations for
+#              the Minecraft server server.jar. It will start the server, monitor it till it
+#              is ready for use, and updates the database, which in turn, allows the api/servers
+#              to display its associated public IP address.
+#              This script also creates a log file mlog.txt for debugging purposes
+# 
+# Note: Backend uses a RDS database via database_adapter.py which handles all database operations
+# Note: server.jar and .bashrc are found in /home/ec2-user which are copied over via SCP
+# ----------------------------------------------------------------------------------------------- #
+
+import os
+import sys
+import time
+import boto3
+import subprocess
+import datetime
+import database_adapter as dba
+
+
+def main():
+    # Create log file
+    os.system('echo "['+str(datetime.datetime.now())+']" > mlog.txt')
+    os.system('echo "Instance monitor log --------------------------------" >> mlog.txt')
+    
+
+    instance_id = sys.argv[1]
+    os.system('echo "Instance ID: '+str(instance_id)+'" >> mlog.txt')
+
+    os.system('echo "Waiting for instance to boot..." >> mlog.txt')
+
+    # Wait until the new instance has booted up - to get public/private IPs
+    os.system("aws ec2 wait instance-running --instance-ids " + str(instance_id))
+    print("Instance has booted. Retrieving IP addresses...")
+
+    # Obtain instance information
+    client = boto3.client('ec2', 'us-east-1')
+    response = client.describe_instances(
+        InstanceIds=[instance_id]
+    )
+
+    private_ip_addr = response['Reservations'][0]['Instances'][0]['PrivateIpAddress']
+    public_ip_addr = response['Reservations'][0]['Instances'][0]['PublicIpAddress']
+
+    # print("mnode: pri " + str(private_ip_addr))
+    # print("mnode: pub " + str(public_ip_addr))
+    os.system('echo "PrivateIpAddress: '+str(private_ip_addr)+'" >> mlog.txt')
+    os.system('echo "PublicIpAddress: '+str(public_ip_addr)+'" >> mlog.txt')
+
+    # Do configurations and installations
+    jdk = "https://download.java.net/java/GA/jdk16.0.1/7147401fd7354114ac51ef3e1328291f/9/GPL/openjdk-16.0.1_linux-x64_bin.tar.gz"
+    command = '{} && {} && {} && {}'
+    command_install_java = command.format(
+        'sudo mkdir /usr/java',
+        'sudo wget '+jdk+' -P /usr/java',
+        'sudo tar -xvzf /usr/java/openjdk-16.0.1_linux-x64_bin.tar.gz -C /usr/java',
+        'sudo mkdir /home/ec2-user/mcserver'
+    )
+
+    # Prepare commands to create config file for server.jar and start the server
+    command = '{} && {}'
+    command_setup_config = command.format(
+        'echo \'eula=true\' > ~/eula.txt',
+        'java -Xmx1024M -Xms1024M -jar ~/server.jar nogui'
+    )
+
+    # Check that yum update and httpd installation is complete
+    os.system('echo "Polling instance..." >> mlog.txt')
+    # Loop to repeatedly check status of software installation in instance
+    ready = False
+    i = 1
+    while not ready:
+        if (i > 10):
+            # Break loop if too long - probaby an error after 5 minutes
+            os.system('echo "Timeout. Failed to detect instance state." >> mlog.txt')
+            break
+        
+        try:
+            # Manually check for the installed software (httpd) as subprocess may exit prematurely without returning anything when grep is blank
+            returned_bytes = subprocess.check_output('ssh -i labsuser.pem -o "StrictHostKeyChecking no" ec2-user@'+private_ip_addr+' -t ps -ef 2>/dev/null | grep -v yum', shell=True)
+            output = returned_bytes.decode().split('\n')
+            for line in output:
+                if ('httpd' in line):
+                    ready = True
+                    break
+        except subprocess.CalledProcessError as e:
+            print(e)
+        if (not ready):
+            os.system('echo "['+str(i)+'] ... going to sleep for 10 seconds" >> mlog.txt')
+            time.sleep(10)
+        i = i + 1
+        
+    
+    if ready == True:
+        os.system('echo "httpd installed" >> mlog.txt')
+        
+        # Software has installed and we can do configurations - Minecraft
+        # Install Java, transfer local copy of server.jar, update .bashrc for Java installation, do final configurations, and start the server
+        os.system('ssh -i labsuser.pem -o "StrictHostKeyChecking no" ec2-user@'+private_ip_addr+' -t "'+command_install_java+'"')
+        os.system('scp -i labsuser.pem -o "StrictHostKeyChecking no" /home/ec2-user/server.jar ec2-user@'+private_ip_addr+':~/')
+        os.system('scp -i labsuser.pem -o "StrictHostKeyChecking no" /home/ec2-user/bashrc ec2-user@'+private_ip_addr+':~/.bashrc')
+        os.system('ssh -i labsuser.pem -o "StrictHostKeyChecking no" ec2-user@'+private_ip_addr+' -t "'+command_setup_config+'" &')
+
+        os.system('echo "Starting the MC server..." >> mlog.txt')
+
+        # Loop to repeatedly check status of software installation in instance
+        ready = False
+        i = 1
+        while not ready:
+            if (i > 20):
+                # Break loop if too long - probaby an error after 5 minutes
+                os.system('echo "Timeout. Failed to start the MC server." >> mlog.txt')
+                break
+            
+            try:
+                # Check the log when the Minecraft server starts for the text "Done"
+                returned_bytes = subprocess.check_output('ssh -i labsuser.pem -o "StrictHostKeyChecking no" ec2-user@'+private_ip_addr+' -t cat /home/ec2-user/logs/latest.log 2>/dev/null | grep -i Done', shell=True)
+                if returned_bytes is not None or returned_bytes != "":
+                    output = returned_bytes.decode()
+                    ready = True
+                    os.system('echo "Returned: '+output+'" >> mlog.txt')
+            except subprocess.CalledProcessError as e:
+                print(e)
+            if (not ready):
+                os.system('echo "['+str(i)+':mc] ... going to sleep for 15 seconds" >> mlog.txt')
+                time.sleep(15)
+            i = i + 1
+        
+        if ready == True:
+            print("Updating the db")
+            # Update the DB
+            conn = dba.create_conn()
+            dba.update_server_state_ready(conn, instance_id)
+            conn.close()
+            print("DB updated")
+            os.system('echo "The Minecraft server is up and running" >> mlog.txt')
+        else:
+            os.system('echo "Unable to start the Minecraft server" >> mlog.txt')
+
+    else:
+        os.system('echo "Operation terminated." >> mlog.txt')
+
+main()

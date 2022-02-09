@@ -1,0 +1,290 @@
+#! /usr/bin/python3
+
+# ----------------------------------------------------------------------------------------------- #
+# CSC346 Clouding Computing - Project 8
+# Author: Glen Chin
+# Title: main
+# Description: The main webpage of the Minecraft Server Hosting website.
+#              Relies on cookie session for logging in, which lasts 10 minutes per session.
+#              Cookie expiry is refreshed when the user logs in again.
+#
+# Webpages:
+#   1) Login Page
+#   2) Main Page (displays all owned servers)
+#   3) Individual Server Page (shows details of selected server)
+#   4) Create New Server page 
+#
+# Note: Backend uses a RDS database via database_adapter.py which handles all database operations
+# ----------------------------------------------------------------------------------------------- #
+
+import os
+import cgi
+import requests
+import database_adapter as dba
+
+
+# Check if cookie is defined, if defined -> check that it has not expired, if not defined -> create one and ask them to log in
+# Logged in -> show all servers belonging to them with a create server button?
+
+# GLOBAL VARIABLE FOR DATABASE CONNECTION
+conn = dba.create_conn()
+
+def printHeadWithCSS():
+    print('''
+    <head>
+        <style>
+            body {
+                font-family: Helvetica, sans-serif;
+                background: rgb(238, 238, 238);
+            }
+
+            .banner {
+                padding: 5px 16px;
+                background: #555;
+                color: #f1f1f1;
+                display: flex;
+                justify-content: space-between;
+            }
+            
+            .logo {
+                display: inline-flex;
+            }
+
+            .logo img {
+                margin: auto;
+                padding-right: 10px;
+            }
+
+            .info {
+                margin-top: auto;
+                margin-bottom: auto;
+            }
+
+            .servermenu {
+                padding-top: 20px;
+            }
+
+            .server {
+                padding-top: 20px
+            }
+            
+            .label {
+                margin-top: 10px;
+            }
+
+            .serveritem {
+                margin-top: 5px;
+                background:rgb(255, 255, 255);
+                padding: 10px;
+                border-style: solid;
+                border-color: grey;
+                border-width: 1px;
+                border-radius: 8px;
+                display: flex;
+                justify-content: space-between;
+            }
+
+            .serverbtn {
+                margin-top: auto;
+                margin-bottom: auto;
+            }
+            
+            .serveritem form {
+                display: inline;
+            }
+
+            .container {
+                margin: auto;
+                margin-top: 20px;
+                width: 30%;
+            }
+
+            .contents {
+                font-size: 16px;
+                padding: 25px;
+                background:rgb(255, 255, 255);
+                border-style: solid;
+                border-color: grey;
+                border-width: 1px;
+                border-radius: 5px;
+            }
+
+            .block {
+                display: block;
+                margin-bottom: 10px
+            }
+        </style>
+    </head>
+    ''')
+
+# This function generates the HTML for each server to display
+def generateServerList(data, numServers, link):
+    for i in range(numServers):
+        server = data[i]
+        node_link = link + "?server=" + str(server['id'])
+        count = i + 1
+        print('<div class="server">')
+        print('<span class="label"><b>Server '+str(count)+'</b></span>')
+        print('<div class="serveritem">')
+        print('<div>')
+        print('Server ID: '+str(server['id'])+'<br>')
+        if str(server['publicIP']) == "":
+            print('<b>Public IP Address: <span style="color:red"><i>pending...</i></span></b>')
+        else:
+            print('<b>Public IP Address: <span style="color:green">'+str(server['publicIP'])+'</span></b>')
+        print('</div>')
+        print('<div class="serverbtn">')
+        print('<button onclick="window.location.href=\''+node_link+'\';">View</button>')
+        print('<form action="/cgi-bin/terminate_server" method="POST">')
+        print('<input type="hidden" name="id" value="'+str(server['instanceID'])+'">')
+        print('<input type="submit" value="Terminate">')
+        print('</form>')
+        print('</div>')
+        print('</div>')
+        print('</div>')
+
+# This function generates the HTML to print the banner on each of the webpages
+def printBanner(owner, link):
+    print('<div class="banner" id="banner">')
+    print('<div class="logo">')
+    print('<img src="https://cdn.pixabay.com/photo/2013/07/12/19/25/minecraft-154749_960_720.png" alt="mc" width="40" height="40">')
+    print('<h2><a href="'+link+'" style="color: #f1f1f1; text-decoration: none;">Minecraft Server Hosting</a></h2></div>')
+    if owner is not None:
+        print('<div class="info"><i>logged in as <span style="color:#ffaa00"><b>'+str(owner)+'</b></span></i></div>')
+    print('</div>')
+
+def main():
+        # Retrieve session from database
+        isCookieExist = False
+        cookie = None
+        msg = None
+        if 'HTTP_COOKIE' in os.environ:
+            found = False
+            cookie_list = os.environ['HTTP_COOKIE']
+            for cookie in cookie_list.split(';'):
+                cookie = cookie.strip()
+                (key, value) = cookie.split('=')
+                if key == 'owner':
+                    owner = value
+                    found = True
+                    break
+            if (found):
+                isCookieExist = dba.checkCookieExist(conn, owner)
+                if (isCookieExist):
+                    hasValidCookie = dba.checkCookieValidity(conn, owner)
+                    if (hasValidCookie == False):
+                        # Cookie exist but is invalid so user must re-log in
+                        isCookieExist = False
+                        msg = "Your session has expired. Please log in again."
+
+
+        # Show logged in stuff
+        print("Status: 200 OK")
+        print("Content-Type: text/html")
+        print()
+
+        url = "http://" + os.environ["HTTP_HOST"]
+        port = os.environ["SERVER_PORT"]
+        script = os.environ["SCRIPT_NAME"]
+        link = url + ":" + port + "/cgi-bin/api/servers"
+        node_link = url + ":" + port + "/cgi-bin/main"
+        main_link = url + ":" + port + script
+
+        # Generate HTML depending on cookie validation
+        if (isCookieExist):
+            isCreate = False
+            isServer = False
+            form = cgi.FieldStorage()
+            if ("new" in form):
+                isCreate = True
+            if ("server" in form):
+                isServer = True
+
+
+            if (isCreate):
+                # Show Create Server page
+                print('<html>')
+                printHeadWithCSS()
+                print('<body>')
+                printBanner(owner, main_link)
+                print('<div class="container">')
+                print('<h3><span class="center">Create a New Server</span></h3>')
+                print('<div class="contents">')
+                print('<span class="block"><b>Minecraft Server Version: 1.17.1</b></span>')
+                print('<span class="block"><b>Owner:</b> '+str(owner)+'</span><br>')
+                print('<span class="block"><b>Description</b> <i>(optional)</i><b>:</b></span>')
+                print('<form action="/cgi-bin/create_server" method="POST">')
+                print('<textarea name="desc" rows="4" cols="50"></textarea><br><br>')
+                print('<input type="submit" value="Create">')
+                print('</form>')
+                print('</div>')           
+                print('</div>')
+                print('</body></html>')
+
+            elif (isServer):
+                # Show Invidual Server page
+                server_id = form["server"].value
+                cookies = {key: value}
+                link = link + "/" + server_id
+                r = requests.get(link, cookies=cookies, timeout=5)
+                server = r.json()
+
+                print('<html>')
+                printHeadWithCSS()
+                print('<body>')
+                printBanner(owner, main_link)
+                print('<div class="container">')
+                print('<h3><span class="center">Server ID: '+str(server['id'])+'</span></h3>')
+                print('<div class="contents">')
+                print('<span class="block"><b>Minecraft Server Version: 1.17.1</b></span>')
+                print('<span class="block"><b>Owner:</b> '+str(server['owner'])+'</span>')
+                print('<span class="block"><b>Description:</b> '+str(server['description'])+'</span>')
+                if str(server['publicIP']) == "":
+                    print('<span class="block"><b>Public IP Address: <span style="color:red"><i>pending...</i></span></b></span>')
+                else:
+                    print('<span class="block"><b>Public IP Address: <span style="color:green">'+str(server['publicIP'])+'</span></b></span>')
+                print('</div>')           
+                print('</div>')
+                print('</body></html>')
+
+            else:
+                # Show main screen with all owned servers
+                cookies = {key: value}
+                r = requests.get(link, cookies=cookies, timeout=5)
+                data = r.json()
+                numServers = len(data)
+
+                print('<html>')
+                printHeadWithCSS()
+                print('<body>')
+                printBanner(owner, main_link)
+                print('<div class="servermenu">')
+                print('<form action="/cgi-bin/main?new=1">')
+                print('<input type="submit" name="new" value="Create a New Server" />')
+                print('</form>')
+                print('<h3>Your servers ('+str(numServers)+')</h3>')
+                generateServerList(data, numServers, node_link)       
+                print('</div>')
+                print('</body></html>')
+
+
+        else:
+            # Show log in screen
+            print('<html>')
+            printHeadWithCSS()
+            print('<body>')
+            printBanner(None, main_link)
+            print('<div class="container">')
+            print('<h3><span class="center">Login Portal</span></h3>')
+            print('<div class="contents">')
+            if (msg is not None):
+                print('<p style="color: red;">'+msg+'</p>')
+            print('<form action="/cgi-bin/process" method="POST">')
+            print('<label>Username: </label><input type="text" name="username" required><br><br>')
+            print('<input type="submit" value="Log in">')
+            print("</form>")
+            print('</div>')           
+            print('</div>')
+            print('</html></body>')
+
+main()

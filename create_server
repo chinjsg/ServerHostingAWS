@@ -1,0 +1,140 @@
+#! /usr/bin/python3
+
+# ----------------------------------------------------------------------------------------------- #
+# CSC346 Clouding Computing - Project 8
+# Author: Glen Chin
+# Title: create_server
+# Description: Create an instance to host a Minecraft Server.
+#              Runs a background script monitor_node to monitor server state, which will
+#              update the database when server is ready.
+#
+# Called by:
+#   - main (Create New Server page)
+# 
+# Note: Backend uses a RDS database via database_adapter.py which handles all database operations
+# ----------------------------------------------------------------------------------------------- #
+
+import os
+import cgi
+import boto3
+import database_adapter as dba
+
+user_data = """#! bin/bash
+sudo yum update -y
+sudo yum install -y mariadb mariadb-devel gcc python3-devel
+sudo pip3 install mysqlclient
+
+sudo yum install -y httpd
+sudo service httpd start
+sudo systemctl enable httpd
+"""
+#Note the above userdata is for httpbin - minecraft will probably have to install java etc
+
+# GLOBAL VARIABLE FOR DATABASE CONNECTION
+conn = dba.create_conn()
+
+
+# Helper function - Prints generic headers for HTML
+#                   supports 200, 303
+def printHeaderOK():
+    print("Status: 200 OK")
+    print("Content-Type: text/plain")
+    print()
+
+def printHeaderRedir(server_id):
+    print("Status: 303 Redirect")
+    print("Location: /cgi-bin/main?server=" + str(server_id))
+    print()
+
+# Helper function - Prints Bad Request header and its corresponding HTML error body
+def printHeaderBadReq(code):
+    print("Status: 400 Bad Request")
+    print("Content-Type: text/html")
+    print()
+    printBadReqBody(code)
+
+# Helper function to print a HTML error body for bad requests and the reason
+def printBadReqBody(type):
+    reason = ""
+    if type == "user":
+        reason = 'The user must be provided and cannot be empty'
+    elif type == "cookie":
+        reason = 'The session is invalid'
+
+    print('<html><body>')
+    print('<h1>400 Bad Request</h1>')
+    print(reason)
+    print('</body></html>')
+
+
+def post(owner):
+     #print("create_server")
+    client = boto3.client('ec2', 'us-east-1')
+    #data = client.describe_instances()
+    #print(data)
+
+    form = cgi.FieldStorage()
+
+    desc = ""
+    if ("desc" in form):
+        desc = form["desc"].value.strip()
+
+    # Create the new instance
+    response = client.run_instances(
+        ImageId = 'ami-01cc34ab2709337aa',
+        InstanceType = 't2.small',
+        KeyName = 'vockey',
+        MaxCount = 1,
+        MinCount = 1,
+        SecurityGroupIds=['sg-0e889a0385e7ad524'],
+        UserData = user_data
+    )
+    #printHeaderOK() ###
+    instanceId = response['Instances'][0]['InstanceId']
+    privateIp = response['Instances'][0]['PrivateIpAddress']
+    
+    # Insert information into the database
+    conn = dba.create_conn()
+    dba.insert_server(conn, owner, desc, instanceId)
+    conn.close()
+
+    # Run background script to handle logistics
+    os.system('./monitor_node '+instanceId+' 1>/dev/null 2>/dev/null &')
+
+    # Redirect the user
+    conn = dba.create_conn()
+    server_id = dba.get_server_by_instanceID(conn, instanceId)
+    conn.close()
+    printHeaderRedir(server_id)
+
+def main():
+    # Check if user has a session and is valid
+    isCookieExist = False
+    if 'HTTP_COOKIE' in os.environ:
+        found = False
+        cookie_list = os.environ['HTTP_COOKIE']
+        for cookie in cookie_list.split(';'):
+            cookie = cookie.strip()
+            (key, value) = cookie.split('=')
+            if key == 'owner':
+                owner = value
+                found = True
+                break
+        if (found):
+            isCookieExist = dba.checkCookieExist(conn, owner)
+            if (isCookieExist):
+                hasValidCookie = dba.checkCookieValidity(conn, owner)
+                if (hasValidCookie == False):
+                    # Cookie exist but is invalid so user must re-log in
+                    isCookieExist = False
+
+    # Check method
+    if (isCookieExist):
+        method = os.environ["REQUEST_METHOD"]
+        if method  == "POST":
+            post(owner)
+    else:
+        printHeaderBadReq("cookie")
+   
+
+main()

@@ -1,0 +1,251 @@
+#! /usr/bin/python3
+
+# ----------------------------------------------------------------------------------------------- #
+# CSC346 Clouding Computing - Project 8
+# Author: Glen Chin
+# Title: api
+# Description: REST API for servers. Called by main through the Python requests library
+#
+# Supports:
+#   api/servers
+#   api/servers/<id>
+# 
+# Note: Backend uses a RDS database via database_adapter.py which handles all database operations
+# ----------------------------------------------------------------------------------------------- #
+
+import os
+import json
+import boto3
+import database_adapter as dba
+
+# GLOBAL VARIABLE FOR DATABASE CONNECTION
+conn = dba.create_conn()
+ec2_c = boto3.client('ec2', 'us-east-1')
+
+# Helper function to check if a given variable can be converted to int type
+def is_digit(x):
+    try:
+        int(x)
+    except ValueError:
+        return False
+    return True
+
+# Helper function - Prints generic headers for HTML
+#                   supports 200, 303
+def printHeader(code):
+    if (code == 200):
+        print("Status: 200 OK")
+        print("Content-Type: text/plain")
+    elif (code == 303):
+        print("Status: 303 Redirect")
+        print("Location: /cgi-bin/api")
+    print()
+
+# Helper function - Prints File Not Found header and its corresponding HTML error body
+#                   supports 404
+def printHeaderNotFound(path):
+    print("Status: 404 Not Found")
+    #print("Content-Type: text/html")
+    print()
+    printErrorBody(404, path)
+
+# Helper function - Prints Bad Request header and its corresponding HTML error body
+def printHeaderBadReq(code):
+    print("Status: 400 Bad Request")
+    print()
+    printBadReqBody(code)
+
+# Helper function to print a HTML error body indicating the status code and the reason
+# Takes in minimum 2 arguments and maximum 3 arguments code,path,allowed_type
+def printErrorBody(*arg):
+    code = arg[0]
+    path = arg[1]
+    allowed_type = ""
+    if len(arg) == 3:
+        allowed_type = arg[2]
+
+    status = ""
+    if code == 404:
+        status = "404 Not Found"
+    elif code == 405:
+        status = "405 Method Not Allowed"
+
+    print('<html><body>')
+    print('<h1>'+ status +'</h1>')
+    print('PATH_INFO: ' + path)
+    if code == 405:
+        print('<br><br>Allowed: ' + allowed_type)
+    print('</body></html>')
+
+# Helper function to print a HTML error body for bad requests and the reason
+def printBadReqBody(type):
+    reason = ""
+    if type == "int":
+        reason = 'The ID of the server is not an integer'
+    elif type == "cookie":
+        reason = 'The session is invalid'
+
+    print('<html><body>')
+    print('<h1>400 Bad Request</h1>')
+    print(reason)
+    print('</body></html>')
+
+# Function to generically check if an element exists in a collection
+def checkElementExist(id):   
+    return dba.is_exist_server(conn, id)
+
+# Retrieve a record by id
+def getRow(id, owner):    
+    data = dba.get_server_by_id(conn, id, owner)
+
+    # Only 1 row should be returned in data since id is unique
+    row = data[0]
+    ready_state = row[4]
+    ip_addr = ""
+    if (ready_state == 1):
+        instance_id = row[3]
+        ip_addr = getPubIPAddr(instance_id)
+    return {
+        "id": row[0],
+        "owner": row[1],
+        "description": row[2],
+        "publicIP": ip_addr
+    }
+
+# Function to generate links for each student record and prints all records
+def printAllRecords(link, owner): 
+    data = dba.get_servers_by_owner(conn, owner)
+
+    jsonData = list()
+    for row in data:
+        instance_id = row[3]
+        ready_state = row[4]
+        ip_addr = ""
+        if (ready_state == 1):
+            ip_addr = getPubIPAddr(instance_id)
+        server = {
+            "id": row[0],
+            "owner": row[1],
+            "description": row[2],
+            "publicIP": ip_addr,
+            "instanceID": instance_id,
+            "link": link + "/" + str(row[0])
+        }
+        jsonData.append(server)
+    # if len(jsonData) == 0:
+    #     print("No servers to show")
+    # else:
+    print(json.dumps(jsonData, indent=2))
+
+def printRecord(row, link):
+    row["link"] = link
+    print(json.dumps(row, indent=2))
+
+def getPubIPAddr(instance_id):
+    
+    response = ec2_c.describe_instances(
+        InstanceIds=[instance_id]
+    )
+    ip = ""
+    try:
+        ip = response['Reservations'][0]['Instances'][0]['PublicIpAddress']
+    except KeyError as e:
+        ip = "error"
+    return ip 
+
+# ----- End of Helper methods -----
+
+def get(owner):
+    # Retrieve the path variable
+    path = ""
+    if "PATH_INFO" in os.environ:
+        path = (os.environ["PATH_INFO"]).lower()
+
+    # Check if the user has specified a path    
+    if path == "" or path == "/":
+        # Nothing to show on /api
+        printHeaderNotFound("None")
+    else:
+        # Process the URL path
+        # target = None
+        path = path.strip('/') # strip leading and end '/'
+        path_split = path.split('/')
+        
+        # Create the full URL for link generation when displaying records
+        # Obtain URL
+        url = "http://" + os.environ["HTTP_HOST"]
+        port = os.environ["SERVER_PORT"]
+        script = os.environ["SCRIPT_NAME"]
+        link = url + ":" + port + script + "/" + path
+
+        # Handle the request 
+        # supports api/servers
+        #          api/servers/<id>
+        # Variable path_length will always be greater than 0
+        path_length = len(path_split)
+        if path_length <= 2:
+            #servers/<id>
+            dir = path_split[0]
+            if (dir == "servers"):
+                if (path_length == 1):
+                    # api/servers
+                    # show all
+                    # OK
+                    printHeader(200)
+                    printAllRecords(link, owner)
+                else:
+                    # api/servers/<id>
+                    server_id = path_split[1]
+                    if (is_digit(server_id)):
+                        server_id = int(server_id)
+                        if checkElementExist(server_id) == False:
+                            # Server does not exist
+                            printHeaderNotFound(path)
+                        else:
+                            # Server exists
+                            # OK
+                            target = getRow(server_id, owner)
+                            printHeader(200)
+                            printRecord(target, link)
+                    else:
+                        # Bad request - id not int
+                        printHeaderBadReq("int")
+            else:
+                #Not found
+                printHeaderNotFound(path)
+
+        else:
+            #Not found
+            printHeaderNotFound(path)
+
+def main():
+
+    # Check if user has a session and is valid
+    isCookieExist = False
+    if 'HTTP_COOKIE' in os.environ:
+        found = False
+        cookie_list = os.environ['HTTP_COOKIE']
+        for cookie in cookie_list.split(';'):
+            cookie = cookie.strip()
+            (key, value) = cookie.split('=')
+            if key == 'owner':
+                owner = value
+                found = True
+                break
+        if (found):
+            isCookieExist = dba.checkCookieExist(conn, owner)
+            if (isCookieExist):
+                hasValidCookie = dba.checkCookieValidity(conn, owner)
+                if (hasValidCookie == False):
+                    # Cookie exist but is invalid so user must re-log in
+                    isCookieExist = False
+
+	# Check method
+    if (isCookieExist):
+        method = os.environ["REQUEST_METHOD"]
+        if method  == "GET":
+            get(owner)
+    else:
+        printHeaderBadReq("cookie")
+
+main()

@@ -1,0 +1,47 @@
+#! /usr/bin/python3
+
+# ----------------------------------------------------------------------------------------------- #
+# CSC346 Clouding Computing - Project 8
+# Author: Glen Chin
+# Title: process
+# Description: Handles the session login in main. Will create and set cookies. Also, refreshes
+#              cookie expiration if the user logs in again.
+#
+# Note: Backend uses a RDS database via database_adapter.py which handles all database operations
+# ----------------------------------------------------------------------------------------------- #
+
+import os
+import cgi
+import database_adapter as dba
+
+# GLOBAL VARIABLE FOR DATABASE CONNECTION
+conn = dba.create_conn()
+
+def post():
+    form = cgi.FieldStorage()
+    if ("username" in form):
+        owner = form["username"].value
+
+        # Insert into database
+        isCookieExist = dba.checkCookieExist(conn, owner)
+
+        if (isCookieExist):
+            # Update the session expiration
+            dba.update_session(conn, owner)
+        else:
+            # Insert a new session
+            dba.insert_session(conn, owner)
+
+        # Send Redirect header to log in
+        print("Status: 303 Redirect")
+        print("Set-Cookie:owner=" + owner)
+        print("Location: /cgi-bin/main")
+        print()
+
+def main():
+    # Check method
+    method = os.environ["REQUEST_METHOD"]
+    if method  == "POST":
+        post()
+
+main()
