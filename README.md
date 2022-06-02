@@ -11,7 +11,7 @@ Demo Link: https://youtu.be/adp6Ay_Jh6U
  * monitor_node
  * process
  * database_adapter.py
- * server.jar
+ * server.jar (omitted from repo)
  * bashrc
 
 ### Notes:
@@ -56,7 +56,7 @@ existing session that has expired.
 This script handles all database interactions across the other scripts. You will need to create a passwords file called dbinfo which includes your credentials to access
 the RDS instance.
 
-[server.jar] (Note: omitted from repository)  
+[server.jar] (omitted)  
 This a file to be transferred into the new instance through monitor_node script.
 
 [bashrc]  
