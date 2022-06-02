@@ -22,7 +22,7 @@ Demo Link: https://youtu.be/adp6Ay_Jh6U
 ### Webpage Example URL:  
 http://<ip_address>/cgi-bin/main
 
-### Description of files:  
+### File Descriptions:  
 [api]  
 This script handles the REST api and displays information of all records of created instances in JSON format. If the server is ready to be used, the
 public IP address will be displayed, otherwise, it will appear blank.  
