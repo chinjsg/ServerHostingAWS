@@ -1,7 +1,7 @@
-# Server Hosting (AWS)
+Server Hosting (AWS)
 
 Cloud Computing Project
-Demo Link: https://youtu.be/adp6Ay_Jh6U
+Demo Link: https://youtu.be/adp6Ay_Jh6U  
 
 Files:
  * api
